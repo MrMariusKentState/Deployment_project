@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="{{ url_for('static', filename='welcome.css') }}">
+    <title>Welcome!</title>
+</head>
+<body>
+    <div id = "container">
+        <div id = "header">
+            <h1>Welcome {{user.first_name}}!</h1>
+            <a href = '/dashboard' id ="dashboard">Dashboard</a>
+            <a href = '/logout'>Logout</a>
+        </div>
+        <h1>{{recipe.name}}</h1>
+        <div id = "box-border">
+            <div id = "leftcol">
+                <h3>Description: </h3>
+                <br>
+                <br>
+                <h3>Under 30 minutes:</h3>
+                <br>
+                <br>
+                <h3>Instructions: </h3>
+                <br>
+                <br>
+                <h3>Date Made: </h3>
+                <br>
+                <br>
+            </div>
+            <div id = "rightcol">
+                <h3>{{recipe.description}}</h3>
+                <br>
+                <br>
+                <h3>{{recipe.minutes}}</h3>
+                <br>
+                <br>
+                <h3>{{recipe.instructions}}</h3>
+                <br>
+                <br>
+                <h3>{{recipe.created_at}}</h3>
+                <br>
+                <br>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

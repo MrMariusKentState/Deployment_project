@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="{{ url_for('static', filename='editrecipe.css') }}">
+    <title>Edit recipe</title>
+</head>
+<body>
+    <div id = "container">
+        <div id = "header">
+            <h1>Edit Recipe</h1>
+            <a href = '/dashboard' id ="dashboard">Dashboard</a>
+            <a href = '/logout'>Logout</a>
+        </div>
+        <form action='/recipes/edit/submit/{{recipe.id}}' method='post'>
+            <div id = "leftcol">
+                <label for='name'>Recipe Name: </label>
+                <input type='text' name='rname' value = '{{recipe.name}}'>
+                <br>
+                <br>
+                <label for = "description" >Description:</label>
+                <br>
+                <textarea name="description">{{recipe.description}}</textarea>
+                <br>
+                <br>
+                <label for = "instructions">Instructions:</label>
+                <br>
+                <textarea name="instructions">{{recipe.instructions}}</textarea>
+                <br>
+                <br>
+                <input type = "submit">
+            </div>
+            <div id = "rightcol">
+                <label for="datemade" >Date Made On:</label>
+                <input type="date" id="datemadeon" name="datemade" value = "1997-10-11">
+                <br>
+                <br>
+                <br>
+                <label for="thirty">Under 30 minutes?</label>
+                <br>
+                <br>
+                {% if recipe.minutes == "yes" %}
+                    <label for="yes">Yes</label>
+                    <input type="radio" id="yes" name="radio" value="yes" checked>
+                    <label for="no">No</label>
+                    <input type="radio" id="no" name="radio" value="no">
+                {% elif recipe.minutes == "no" %}
+                    <label for="no">No</label>
+                    <input type="radio" id="no" name="radio" value="no" checked>
+                    <label for="yes">Yes</label>
+                    <input type="radio" id="yes" name="radio" value="yes">
+                {% endif %}
+            </div>
+        </form>
+    </div>
+</body>
+</html>

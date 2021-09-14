@@ -1,0 +1,721 @@
+#MYSQLCONNECT.PY
+
+
+import pymysql.cursors
+# this class will give us an instance of a connection to our database
+class MySQLConnection:
+    def __init__(self, db):
+        connection = pymysql.connect(host = 'localhost',
+                                    user = 'root',
+                                    password = 'root',
+                                    db = db,
+                                    charset = 'utf8mb4',
+                                    cursorclass = pymysql.cursors.DictCursor,
+                                    autocommit = True)
+        self.connection = connection
+
+    def query_db(self, query, data=None):
+        with self.connection.cursor() as cursor:
+            try:
+                query = cursor.mogrify(query, data)
+                print("Running Query:", query)
+
+                executable = cursor.execute(query, data)
+                if query.lower().find("insert") >= 0:
+                    self.connection.commit()
+                    return cursor.lastrowid
+                elif query.lower().find("select") >= 0:
+                    result = cursor.fetchall()
+                    return result
+                else:
+                    self.connection.commit()
+            except Exception as e:
+                print("Something went wrong", e)
+                return False
+            finally:
+                self.connection.close() 
+# connectToMySQL receives the database we're using and uses it to create an instance of MySQLConnection
+def connectToMySQL(db):
+    return MySQLConnection(db)
+
+
+
+
+#USERCONTROL.PY
+
+
+from flask import render_template, request, redirect, session, flash
+from flask_app.models.user import Login
+from flask_app.models.recipe import Recipe
+
+from flask_app import app
+from flask_bcrypt import Bcrypt
+bcrypt = Bcrypt(app)
+
+
+@app.route('/')
+def home():
+    return render_template("index.html")
+
+
+@app.route('/register/user', methods=['POST'])
+def register():
+    if not Login.register(request.form):
+        return redirect('/')
+    pw_hash = bcrypt.generate_password_hash(request.form['password'])
+    print(pw_hash)
+    # put the pw_hash into the data dictionary
+    data = {
+        "fname": request.form['fname'],
+        "lname": request.form['lname'],
+        "email": request.form['email'],
+        "password" : pw_hash,
+        "cpassword": pw_hash
+    }
+    # Call the save @classmethod on User
+    user_id = Login.save(data)
+    # store user id into session
+    session['user_id'] = user_id
+    flash("Your registration has been successful!  Please login to continue.")
+    return render_template("index.html")
+
+
+
+@app.route('/login', methods=['POST'])
+def login():
+    # see if the username provided exists in the database
+    data = { "email" : request.form['loginemail'] }
+    user_in_db = Login.get_by_email(data)
+    # user is not registered in the db
+    if not user_in_db:
+        flash("Invalid Email/Password. Please try again.")
+        return redirect('/next')
+    if not bcrypt.check_password_hash(user_in_db.password, request.form['loginpassword']):
+        # if we get False after checking the password
+        flash("Invalid Email/Password. Please try again.")
+        return redirect('/next')
+    # if the passwords matched, we set the user_id into session
+    session['user_id'] = user_in_db.id
+    # never render on a post!!!
+    return redirect('/dashboard')
+
+
+@app.route('/dashboard')
+def dashboard():
+    if "user_id" not in session:
+        return redirect ('/')
+    data = {
+        "id": session["user_id"]
+    }
+    user = Login.get_user(data)
+    recipes = Recipe.get_all_recipe_names()
+    return render_template("dashboard.html", user = user, recipes = recipes)
+
+
+
+
+#The dashboard page functions:
+
+@app.route('/recipes/new')
+def create():
+    if "user_id" not in session:
+        return redirect ('/')
+    data = {
+        "id": session["user_id"]
+    }
+    user = Login.get_user(data)
+    return render_template("addrecipe.html", user = user)
+
+
+
+@app.route('/logout')
+def logout():
+    session.clear()
+    return redirect ('/')
+
+
+
+@app.route('/create/recipe/<int:user_id>', methods = ['POST'])
+def add_recipe(user_id):
+    if "user_id" not in session:
+        return redirect ('/')
+    if not Recipe.validate_recipe(request.form):
+        return redirect('/recipes/new')
+    data = {
+        "name": request.form['rname'],
+        "description": request.form['description'],
+        "instructions": request.form['instructions'],
+        "user_id": user_id,
+        "created_at": request.form['datemade'],
+        "30minutes": request.form['radio']
+    }
+    Recipe.add_recipe(data)
+    flash("Your recipe has been added!  It is now posted on the dashboard.")
+    return redirect ('/recipes/new')
+
+
+
+@app.route('/recipes/<int:item_id>')
+def instructions(item_id):
+    if "user_id" not in session:
+        return redirect ('/')
+    data = {
+        "id": session["user_id"]
+    }
+    data2 = {
+        "id": item_id
+    }
+    user = Login.get_user(data)
+    recipe = Recipe.get_recipe(data2)
+    return render_template("welcome.html", recipe = recipe, user = user)
+
+
+@app.route('/recipes/edit/<int:item_id>')
+def edit(item_id):
+    if "user_id" not in session:
+        return redirect ('/')
+    data = {
+        "id": session["user_id"]
+    }
+    data2 = {
+        "id": item_id
+    }
+    user = Login.get_user(data)
+    recipe = Recipe.get_recipe(data2)
+    print(recipe.created_at)
+    return render_template("editrecipe.html", recipe = recipe, user = user)
+
+
+@app.route('/recipes/edit/submit/<int:recipe_id>', methods = ['POST'])
+def submit_edits(recipe_id):
+    data = {
+        "name": request.form['rname'],
+        "description": request.form['description'],
+        "instructions": request.form['instructions'],
+        "created_at": request.form['datemade'],
+        "30minutes": request.form['radio'],
+        "id": recipe_id
+    }
+    Recipe.edit_recipe(data)
+    print("test again")
+    return redirect('/dashboard')
+
+
+
+@app.route('/recipes/delete/<int:item_id>')
+def delete(item_id):
+    if "user_id" not in session:
+        return redirect ('/')
+    data = {
+        "id": item_id
+    }
+    Recipe.delete_recipe(data)
+    return redirect ('/dashboard')
+
+
+
+
+
+
+# RECIPE.PY
+
+from typing import NoReturn
+from flask_app.config.MySQLconnect import MySQLConnection
+from flask import flash
+
+
+
+class Recipe:
+    def __init__( self , data ):
+        self.id = data['id']
+        self.name = data['name']
+        self.description = data['description']
+        self.minutes = data['30_minutes']
+        self.instructions = data['instructions']
+        self.created_at = data['created_at']
+        self.updated_at = data['updated_at']
+        self.user_id = data['user_id']
+
+    @staticmethod
+    def validate_recipe(data):
+            is_valid = True
+            if len(data['rname']) < 1:
+                flash("The recipe name cannot be left blank.")
+                is_valid = False
+            if len(data['rname']) >= 1 and len(data['rname'])<= 2:
+                flash("The recipe name must be at least 3 characters in length.")
+                is_valid = False
+            if len(data['description']) < 1:
+                flash("The description field cannot be left blank.")
+                is_valid = False
+            if len(data['description']) >= 1 and len(data['description'])<= 2:
+                flash("The description must be at least 3 characters in length.")
+                is_valid = False
+            if len(data['instructions']) < 1:
+                flash("The instructions field cannot be left blank.")
+                is_valid = False
+            if len(data['instructions']) >= 1 and len(data['instructions'])<= 2:
+                flash("The instructions field must be at least 3 characters in length.")
+                is_valid = False
+            return is_valid
+
+
+    @classmethod
+    def add_recipe(cls, data ):
+        query = "INSERT INTO recipes (name, description, instructions, created_at, updated_at, user_id, 30_minutes ) VALUES ( %(name)s, %(description)s, %(instructions)s , %(created_at)s , NOW(), %(user_id)s, %(30minutes)s );"
+        return MySQLConnection('user').query_db( query, data )
+
+    @classmethod
+    def get_all_recipe_names(cls):
+        query = "SELECT * FROM recipes";
+        results = MySQLConnection('user').query_db( query)
+        recipes = []
+        for item in results:
+            recipes.append(cls(item))
+        return recipes
+
+    @classmethod
+    def get_recipe(cls, data):
+        query = "SELECT * FROM recipes WHERE id = %(id)s";
+        result = MySQLConnection('user').query_db(query,data)
+        return cls(result[0])
+
+
+    @classmethod
+    def edit_recipe(cls, data):
+        query = "UPDATE recipes SET name = %(name)s, description = %(description)s, instructions = %(instructions)s, 30_minutes = %(30minutes)s, created_at = %(created_at)s WHERE id = %(id)s";
+        print("hope this is successful!")
+        return MySQLConnection('user').query_db(query,data)
+    
+
+    @classmethod
+    def delete_recipe(cls, data):
+        query = "DELETE FROM recipes WHERE id = %(id)s";
+        return MySQLConnection('user').query_db( query, data )
+
+
+
+
+#USER.PY
+
+from flask_app.config.MySQLconnect import MySQLConnection
+from flask import flash
+from flask_app.models.recipe import Recipe
+import re
+EMAIL_REGEX = re.compile(r'^[a-zA-Z0-9.+_-]+@[a-zA-Z0-9._-]+\.[a-zA-Z]+$') 
+
+
+class Login:
+    def __init__( self , data ):
+        self.id = data['id']
+        self.first_name = data['first_name']
+        self.last_name = data['last_name']
+        self.email = data['email']
+        self.password = data['password']
+        self.confirm_password = data['confirm_password']
+        self.created_at = data['created_at']
+        self.updated_at = data['updated_at']
+        self.recipes = []
+
+
+    @staticmethod
+    def register(user):
+            is_valid = True
+            if len(user['fname']) < 2:
+                flash("Your first name must be at least 2 letters in length.")
+                is_valid = False
+            if len(user['lname']) < 2:
+                flash("Your last name must be at least 2 letters in length.")
+                is_valid = False
+            if user['fname'].isalpha() == False:
+                flash("Your first name must be comprised of letters only.")
+                is_valid = False
+            if user['lname'].isalpha() == False:
+                flash("Your last name must be comprised of letters only.")
+                is_valid = False
+            if not EMAIL_REGEX.match(user['email']): 
+                flash("The email address you have provided is invalid.")
+                is_valid = False
+            if len(user['password']) < 8:
+                flash("Your password must be at least 8 characters in length.")
+                is_valid = False
+            query = "SELECT * From user WHERE email = %(email)s;"
+            results = MySQLConnection('user').query_db( query, user )
+            if len(results) > 0:
+                flash("You must register with a different email address.");
+                is_valid = False;
+            query = "SELECT * From user WHERE password = %(password)s;"
+            results = MySQLConnection('user').query_db( query, user )
+            if len(results) > 0:
+                flash("This password is not available.  Please choose a different password.");
+                is_valid = False;
+            if user['password'] != user['cpassword']:
+                flash("Your password and password confirmation must match.")
+                is_valid = False;
+            return is_valid
+
+
+    @classmethod
+    def save(cls, data ):
+            query = "INSERT INTO user (first_name, last_name, email, password, confirm_password, created_at, updated_at ) VALUES ( %(fname)s, %(lname)s, %(email)s , %(password)s, %(cpassword)s, NOW() , NOW() );"
+            return MySQLConnection('user').query_db( query, data )
+
+
+    @classmethod
+    def get_by_email(cls,data):
+            query = "SELECT * FROM user WHERE email = %(email)s;"
+            result = MySQLConnection('user').query_db(query,data)
+            # Didn't find a matching user
+            if len(result) < 1:
+                return False
+            return cls(result[0])
+
+
+    @classmethod
+    def get_user(cls, data):
+            query = "SELECT * FROM user WHERE id = %(id)s;"
+            result = MySQLConnection('user').query_db(query,data)
+            return cls(result[0])
+
+
+
+    @classmethod
+    def get_user_with_recipes(cls, data):
+        query = "SELECT * FROM user LEFT JOIN recipes ON recipes.user_id = user.id WHERE user.id = %(id)s;"
+        results = MySQLConnection('user').query_db(query,data)
+        recipe = cls(results[0])
+        for row in results:
+            print(row)
+            recipe_data = {
+                "id": row['recipes.id'],
+                "name": row['recipes.name'],
+                "description": row['recipes.description'],
+                "minutes": row['recipes.30_minutes'],
+                "instructions": row['recipes.instructions'],
+                "created_at": row['recipes.created_at'],
+                "updated_at":row['recipes.updated_at'],
+                "user_id": row['recipes.user_id']
+            }
+        recipe.recipes.append(recipe.Recipe(recipe_data))
+        return recipe
+
+
+#ADDRECIPE.HTML
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="{{ url_for('static', filename='addrecipe.css') }}">
+    <title>Add recipe</title>
+</head>
+<body>
+    <div id = "container">
+        <div id = "header">
+            <h1>Add New Recipe</h1>
+            <a href = '/dashboard' id ="dashboard">Dashboard</a>
+            <a href = '/logout'>Logout</a>
+        </div>
+        <form action='/create/recipe/{{user.id}}' method='post'>
+            <div id = "leftcol">
+                <label for='name'>Recipe Name: </label>
+                <input type='text' name='rname'>
+                <br>
+                <br>
+                <label for = "description">Description:</label>
+                <br>
+                <textarea name="description"></textarea>
+                <br>
+                <br>
+                <label for = "instructions">Instructions:</label>
+                <br>
+                <textarea name="instructions"></textarea>
+                <br>
+                <br>
+                <input type = "submit">
+                <br>
+                <br>
+                {% with messages = get_flashed_messages() %}     <!-- declare a variable called messages -->
+                    {% if messages %}                            <!-- check if there are any messages -->
+                        {% for message in messages %}            <!-- loop through the messages -->
+                            <p id = "flash">{{message}}</p>                   <!-- display each message in a paragraph tag -->
+                        {% endfor %}
+                    {% endif %}
+                {% endwith %}
+            </div>
+            <div id = "rightcol">
+                <label for="datemade">Date Made On:</label>
+                <input type="date" id="datemadeon" name="datemade">
+                <br>
+                <br>
+                <br>
+                <label for="thirty">Under 30 minutes?</label>
+                <br>
+                <br>
+                <label for="yes">Yes</label>
+                <input type="radio" id="yes" name="radio" value="yes">
+                <label for="no">No</label>
+                <input type="radio" id="no" name="radio" value="no">
+            </div>
+        </form>
+    </div>
+</body>
+</html>
+
+
+#DASHBOARD.HTML
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
+    <title>Dashboard</title>
+</head>
+<body>
+    <div id = "container">
+        <div id = "header">
+            <h1>Welcome {{user.first_name}}!</h1>
+            <a href = '/recipes/new' id ="create">Create new recipe</a>
+            <a href = '/logout'>Logout</a>
+        </div>
+        <h3>These are the recipes: </h3>
+        <table>
+            <thead>
+                <tr>
+                    <th>Name:</th>
+                    <th>Under 30 minutes?</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in recipes %}
+                <tr>
+                    <td>{{item.name}}</td>
+                    <td>{{item.minutes}}</td>
+                    <td><a href = "/recipes/{{item.id}}">View Instructions</a>  
+                            {% if item.user_id == user.id %}
+                                <a href = "/recipes/edit/{{item.id}}">Edit</a>
+                                <a href = "/recipes/delete/{{item.id}}">Delete</a>
+                            {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</body>
+</html>
+
+
+#EDITRECIPE.HTML
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="{{ url_for('static', filename='editrecipe.css') }}">
+    <title>Edit recipe</title>
+</head>
+<body>
+    <div id = "container">
+        <div id = "header">
+            <h1>Edit Recipe</h1>
+            <a href = '/dashboard' id ="dashboard">Dashboard</a>
+            <a href = '/logout'>Logout</a>
+        </div>
+        <form action='/recipes/edit/submit/{{recipe.id}}' method='post'>
+            <div id = "leftcol">
+                <label for='name'>Recipe Name: </label>
+                <input type='text' name='rname' value = '{{recipe.name}}'>
+                <br>
+                <br>
+                <label for = "description" >Description:</label>
+                <br>
+                <textarea name="description">{{recipe.description}}</textarea>
+                <br>
+                <br>
+                <label for = "instructions">Instructions:</label>
+                <br>
+                <textarea name="instructions">{{recipe.instructions}}</textarea>
+                <br>
+                <br>
+                <input type = "submit">
+            </div>
+            <div id = "rightcol">
+                <label for="datemade" >Date Made On:</label>
+                <input type="date" id="datemadeon" name="datemade" value = "1997-10-11">
+                <br>
+                <br>
+                <br>
+                <label for="thirty">Under 30 minutes?</label>
+                <br>
+                <br>
+                {% if recipe.minutes == "yes" %}
+                    <label for="yes">Yes</label>
+                    <input type="radio" id="yes" name="radio" value="yes" checked>
+                    <label for="no">No</label>
+                    <input type="radio" id="no" name="radio" value="no">
+                {% elif recipe.minutes == "no" %}
+                    <label for="no">No</label>
+                    <input type="radio" id="no" name="radio" value="no" checked>
+                    <label for="yes">Yes</label>
+                    <input type="radio" id="yes" name="radio" value="yes">
+                {% endif %}
+            </div>
+        </form>
+    </div>
+</body>
+</html>
+
+
+#INDEX.HTML
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <title>Home</title>
+</head>
+<body>
+    <div id = "container">
+        <h1>Register and login to create your own recipes!</h1>
+        <div id = "leftcol">
+            <h2> Register: </h2>
+            <form action='/register/user' method='post'>
+                <label for='fname'>First Name: </label>
+                <input type='text' name='fname'>
+                <br>
+                <br>
+                <label for='lname'>Last Name: </label>
+                <input type='text' name='lname'>
+                <br>
+                <br>
+                <label for='email'>Email: </label>
+                <input type='email' name='email'>
+                <br>
+                <br>
+                <label for='password'>Password: </label>
+                <input type='password' name='password'>
+                <br>
+                <br>
+                <label for='cpassword'>Confirm Password: </label>
+                <input type='password' name='cpassword'>
+                <br>
+                <br>
+                <button name = 'submit' type = 'submit'>Submit your registration</button>
+                <br>
+                <br>
+                {% with messages = get_flashed_messages() %}     <!-- declare a variable called messages -->
+                    {% if messages %}                            <!-- check if there are any messages -->
+                        {% for message in messages %}            <!-- loop through the messages -->
+                            <p id = "message">{{message}}</p>                   <!-- display each message in a paragraph tag -->
+                        {% endfor %}
+                    {% endif %}
+                {% endwith %}
+            </form>
+        </div>
+        <div id = "rightcol">
+            <h2> Login: </h2>
+            <form action='/login' method='post'>
+                <label for='email'>Email: </label>
+                <input type='email' name='loginemail'>
+                <br>
+                <br>
+                <label for='password'>Password: </label>
+                <input type='password' name='loginpassword'>
+                <br>
+                <br>
+                <button name = 'submit' type = 'submit'>Login</button>
+            </form>
+        </div>
+    </div>
+</body>
+</html>
+
+
+#WELCOME.HTML
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="{{ url_for('static', filename='welcome.css') }}">
+    <title>Welcome!</title>
+</head>
+<body>
+    <div id = "container">
+        <div id = "header">
+            <h1>Welcome {{user.first_name}}!</h1>
+            <a href = '/dashboard' id ="dashboard">Dashboard</a>
+            <a href = '/logout'>Logout</a>
+        </div>
+        <h1>{{recipe.name}}</h1>
+        <div id = "box-border">
+            <div id = "leftcol">
+                <h3>Description: </h3>
+                <br>
+                <br>
+                <h3>Under 30 minutes:</h3>
+                <br>
+                <br>
+                <h3>Instructions: </h3>
+                <br>
+                <br>
+                <h3>Date Made: </h3>
+                <br>
+                <br>
+            </div>
+            <div id = "rightcol">
+                <h3>{{recipe.description}}</h3>
+                <br>
+                <br>
+                <h3>{{recipe.minutes}}</h3>
+                <br>
+                <br>
+                <h3>{{recipe.instructions}}</h3>
+                <br>
+                <br>
+                <h3>{{recipe.created_at}}</h3>
+                <br>
+                <br>
+            </div>
+        </div>
+    </div>
+</body>
+</html>
+
+
+#__INIT__.PY
+
+from flask import Flask
+app = Flask(__name__)
+app.secret_key = 'Login!' # set a secret key for security purposes
+
+
+#SERVER.PY
+
+from flask_app.controllers import usercontrol
+from flask_app import app
+
+
+if __name__ == "__main__":
+    app.run(debug=True)
+
+
+
+
+
+
+    
